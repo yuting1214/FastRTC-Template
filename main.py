@@ -1,163 +1,56 @@
-import asyncio
-import base64
-import json
+#!/usr/bin/env python3
+"""
+FastRTC OpenAI Realtime Template - Entry Point
+
+Usage:
+    uv run python main.py          # FastAPI server (default)
+    MODE=UI uv run python main.py  # Gradio UI
+"""
+
 import logging
 import os
-from pathlib import Path
+import sys
 
-import gradio as gr
-import numpy as np
-import openai
-from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastrtc import (
-    AdditionalOutputs,
-    AsyncStreamHandler,
-    Stream,
-    get_twilio_turn_credentials,
-    wait_for_item,
+# Add src to path for imports
+sys.path.insert(0, os.path.dirname(__file__))
+
+from src.config import settings
+from src.core import create_stream
+from src.api import create_app
+from src.ui.gradio_app import launch_gradio
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-from gradio.utils import get_space
-
-load_dotenv('.env')
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-if not os.getenv("OPENAI_API_KEY"):
-    logger.warning("OPENAI_API_KEY not found in environment!")
 
-cur_dir = Path(__file__).parent
+def main() -> None:
+    """Main entry point."""
+    mode = os.getenv("MODE", "").upper()
 
-SAMPLE_RATE = 24000
+    # Create the stream (shared across modes)
+    stream = create_stream()
 
+    if mode == "UI":
+        # Launch Gradio UI
+        launch_gradio(stream)
 
-class OpenAIHandler(AsyncStreamHandler):
-    def __init__(
-        self,
-    ) -> None:
-        super().__init__(
-            expected_layout="mono",
-            output_sample_rate=SAMPLE_RATE,
-            input_sample_rate=SAMPLE_RATE,
-        )
-        self.connection = None
-        self.output_queue = asyncio.Queue()
+    elif mode == "PHONE":
+        # Launch phone mode
+        logger.info(f"Starting phone mode on {settings.host}:{settings.port}")
+        stream.fastphone(host=settings.host, port=settings.port)
 
-    def copy(self):
-        return OpenAIHandler()
+    else:
+        # Launch FastAPI server
+        import uvicorn
 
-    async def start_up(self):
-        """Connect to realtime API."""
-        try:
-            self.client = openai.AsyncOpenAI()
-            async with self.client.realtime.connect(
-                model="gpt-4o-mini-realtime-preview"
-            ) as conn:
-                logger.info("Connected to OpenAI realtime API")
-                await conn.session.update(
-                    session={
-                        "turn_detection": {"type": "server_vad"},
-                        "input_audio_transcription": {"model": "whisper-1"},
-                    }
-                )
-                self.connection = conn
-                async for event in self.connection:
-                    if event.type == "input_audio_buffer.speech_started":
-                        self.clear_queue()
-                    elif event.type == "conversation.item.input_audio_transcription.completed":
-                        logger.info(f"User: {event.transcript}")
-                        await self.output_queue.put(
-                            AdditionalOutputs({"role": "user", "content": event.transcript})
-                        )
-                    elif event.type == "response.output_audio_transcript.done":
-                        logger.info(f"Assistant: {event.transcript}")
-                        await self.output_queue.put(
-                            AdditionalOutputs({"role": "assistant", "content": event.transcript})
-                        )
-                    elif event.type == "response.output_audio.delta":
-                        await self.output_queue.put(
-                            (
-                                self.output_sample_rate,
-                                np.frombuffer(
-                                    base64.b64decode(event.delta), dtype=np.int16
-                                ).reshape(1, -1),
-                            ),
-                        )
-        except Exception as e:
-            logger.error(f"OpenAI realtime error: {e}")
-            raise
-
-    async def receive(self, frame: tuple[int, np.ndarray]) -> None:
-        if not self.connection:
-            return
-        _, array = frame
-        array = array.squeeze()
-        audio_message = base64.b64encode(array.tobytes()).decode("utf-8")
-        await self.connection.input_audio_buffer.append(audio=audio_message)
-
-    async def emit(self) -> tuple[int, np.ndarray] | AdditionalOutputs | None:
-        return await wait_for_item(self.output_queue)
-
-    async def shutdown(self) -> None:
-        if self.connection:
-            await self.connection.close()
-            self.connection = None
-
-
-def update_chatbot(chatbot: list[dict], response: dict):
-    chatbot.append(response)
-    return chatbot
-
-
-chatbot = gr.Chatbot(type="messages")
-latest_message = gr.Textbox(type="text", visible=False)
-stream = Stream(
-    OpenAIHandler(),
-    mode="send-receive",
-    modality="audio",
-    additional_inputs=[chatbot],
-    additional_outputs=[chatbot],
-    additional_outputs_handler=update_chatbot,
-    rtc_configuration=get_twilio_turn_credentials() if get_space() else None,
-    concurrency_limit=5 if get_space() else None,
-    time_limit=90 if get_space() else None,
-)
-
-app = FastAPI()
-
-stream.mount(app)
-
-
-@app.get("/")
-async def _():
-    rtc_config = get_twilio_turn_credentials() if get_space() else None
-    html_content = (cur_dir / "index.html").read_text()
-    html_content = html_content.replace("__RTC_CONFIGURATION__", json.dumps(rtc_config))
-    return HTMLResponse(content=html_content)
-
-
-@app.get("/outputs")
-def _(webrtc_id: str):
-    async def output_stream():
-        import json
-
-        async for output in stream.output_stream(webrtc_id):
-            s = json.dumps(output.args[0])
-            yield f"event: output\ndata: {s}\n\n"
-
-    return StreamingResponse(output_stream(), media_type="text/event-stream")
+        app = create_app(stream)
+        logger.info(f"Starting FastAPI server at http://localhost:{settings.port}")
+        uvicorn.run(app, host=settings.host, port=settings.port)
 
 
 if __name__ == "__main__":
-    mode = os.getenv("MODE", "")
-
-    if mode == "UI":
-        stream.ui.launch(server_port=7860)
-    elif mode == "PHONE":
-        stream.fastphone(host="0.0.0.0", port=7860)
-    else:
-        import uvicorn
-        logger.info("Starting server at http://localhost:7860")
-        uvicorn.run(app, host="0.0.0.0", port=7860)
+    main()
