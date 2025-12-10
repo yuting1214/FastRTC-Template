@@ -6,7 +6,7 @@ import numpy as np
 import openai
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item
 
-from ..config import settings
+from ..config import settings, get_session_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +35,13 @@ class OpenAIRealtimeHandler(AsyncStreamHandler):
                 model=settings.openai_realtime_model
             ) as conn:
                 logger.info("Connected to OpenAI Realtime API")
-                await conn.session.update(
-                    session={
-                        "turn_detection": {"type": "server_vad"},
-                        "input_audio_transcription": {
-                            "model": settings.openai_transcription_model
-                        },
-                        "input_audio_format": "pcm16",
-                        "output_audio_format": "pcm16",
-                    }
-                )
+                # Build session config with system instructions
+                session_config = get_session_config()
+                # Add transcription model
+                session_config["input_audio_transcription"] = {
+                    "model": settings.openai_transcription_model
+                }
+                await conn.session.update(session=session_config)
                 self.connection = conn
                 await self._handle_events()
         except Exception as e:
