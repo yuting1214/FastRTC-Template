@@ -15,6 +15,7 @@ WORKDIR /app
 ENV UV_SYSTEM_PYTHON=1
 ENV PATH="/root/.local/bin:$PATH"
 ENV PYTHONPATH="/app"
+ENV HOST="0.0.0.0"
 
 # Copy pyproject.toml and uv.lock* first to leverage Docker cache
 COPY pyproject.toml uv.lock* ./
