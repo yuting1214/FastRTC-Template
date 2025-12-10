@@ -41,6 +41,8 @@ class OpenAIRealtimeHandler(AsyncStreamHandler):
                         "input_audio_transcription": {
                             "model": settings.openai_transcription_model
                         },
+                        "input_audio_format": "pcm16",
+                        "output_audio_format": "pcm16",
                     }
                 )
                 self.connection = conn

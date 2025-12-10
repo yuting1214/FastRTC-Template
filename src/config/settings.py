@@ -12,13 +12,13 @@ class Settings:
     # OpenAI
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_realtime_model: str = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini-2025-10-06")
-    openai_transcription_model: str = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1")
+    openai_transcription_model: str = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 
     # Audio
     sample_rate: int = 24000
 
     # Server
-    host: str = os.getenv("HOST", "0.0.0.0")
+    host: str = os.getenv("HOST", "localhost")
     port: int = int(os.getenv("PORT", "7860"))
 
     # Paths
